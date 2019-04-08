@@ -1,0 +1,72 @@
+{
+    "__default__":
+    {
+        "time": "00:30:00",
+        "mem":"5G",
+        "out":"logs/default/{rule}.{wildcards}.out",
+        "err":"logs/default/{rule}.{wildcards}.err"
+    },
+    "check_fastqc":
+    {
+        "time": "02:00:00",
+        "mem":"5G",
+        "out":"logs/check_fastqc/{rule}.{wildcards}.out",
+        "err":"logs/check_fastqc/{rule}.{wildcards}.err"
+    },
+    "bwa_map":
+    {
+        "time": "72:00:00",
+        "mem":"8G",
+        "out":"logs/bwa_map/{rule}.{wildcards}.out",
+        "err":"logs/bwa_map/{rule}.{wildcards}.err"
+    },
+    "samtools_sort":
+    {
+        "time": "08:00:00",
+        "mem":"4G",
+        "out":"logs/samtools_sort/{rule}.{wildcards}.out",
+        "err":"logs/samtools_sort/{rule}.{wildcards}.err"
+    },
+    "add_group_names":
+    {
+        "time": "12:00:00",
+        "mem":"12G",
+        "out":"logs/add_group_names/{rule}.{wildcards}.out",
+        "err":"logs/add_group_names/{rule}.{wildcards}.err"
+    },
+    "merge_bams":
+    {
+        "time": "08:00:00",
+        "mem":"10G",
+        "out":"logs/merge_bams/{rule}.{wildcards}.out",
+        "err":"logs/merge_bams/{rule}.{wildcards}.err"
+    },
+    "remove_duplicates":
+    {
+        "time": "08:00:00",
+        "mem":"10G",
+        "out":"logs/remove_duplicates/{rule}.{wildcards}.out",
+        "err":"logs/remove_duplicates/{rule}.{wildcards}.err"
+    },
+    "remove_duplicates_samtools":
+    {
+        "time": "08:00:00",
+        "mem":"10G",
+        "out":"logs/remove_duplicates_samtools/{rule}.{wildcards}.out",
+        "err":"logs/remove_duplicates_samtools/{rule}.{wildcards}.err"
+    },
+    "realign_indels":
+    {
+        "time": "08:00:00",
+        "mem":"12G",
+        "out":"logs/realign_indels/{rule}.{wildcards}.out",
+        "err":"logs/realign_indels/{rule}.{wildcards}.err"
+    },
+    "calc_bam_stats":
+    {
+	"time": "24:00:00",
+        "mem":"4G",
+        "out":"logs/bam_stats/{rule}.{wildcards}.out",
+        "err":"logs/bam_stats/{rule}.{wildcards}.err"
+    }
+}

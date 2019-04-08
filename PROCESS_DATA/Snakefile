@@ -1,0 +1,56 @@
+import os
+
+# Define chromosome names
+CHROMOSOMES = list(range(1,38))
+for i in range(len(CHROMOSOMES)):
+    if CHROMOSOMES[i] < 10:
+        CHROMOSOMES[i] = "0" + str(CHROMOSOMES[i])
+    else:
+        CHROMOSOMES[i] = str(CHROMOSOMES[i])
+
+configfile: 'config/config.json'
+
+include: "make_and_clean_bams"
+            
+base = config["dirs"]["process_data"]
+ref = config["reference"]
+            
+rule all:
+    input:
+        # output of fastqc for each sample
+        expand("logs/fastqc/{sample}_1/stdin_fastqc.html", sample=config["samples"]),
+        expand("logs/fastqc/{sample}_2/stdin_fastqc.html", sample=config["samples"]),
+        # map reads again to start with
+        expand(os.path.join(base, "mapped_reads/{sample}.bam"), sample=config["samples"]),
+        # bams are all cleaned by not yet recalibrated
+        expand(os.path.join(base, 'realigned_reads/{indiv}.bam'), indiv=config["individuals"]),
+        # calculate stats on bam files
+        expand(os.path.join(base, 'bam_stats/RSRW021.bam'), indiv=config["individuals"])
+        
+rule check_fastqc:
+    input:
+        lambda wildcards: config["samples"][wildcards.sample]["R1"],
+        lambda wildcards: config["samples"][wildcards.sample]["R2"]
+    output:
+        "logs/fastqc/{sample}_1/stdin_fastqc.html",
+        "logs/fastqc/{sample}_2/stdin_fastqc.html"
+    log:
+        "logs/fastqc/{sample}_1/{sample}.out",
+        "logs/fastqc/{sample}_2/{sample}.out",
+        "logs/fastqc/{sample}_1/{sample}.err",
+        "logs/fastqc/{sample}_2/{sample}.err"
+    params:
+        name = '{sample}'
+    shell:
+        'gunzip -c {input[0]} | fastqc stdin --outdir logs/fastqc/{params.name}_1/ 1> {log[0]} 2> {log[2]}; '
+        'gunzip -c {input[1]} | fastqc stdin --outdir logs/fastqc/{params.name}_2/ 1> {log[1]} 2> {log[3]}'
+
+rule calc_bam_stats:
+    input:
+        merged_bam = os.path.join(base, 'merged_reads/{indiv}.bam'),
+        deduped_bam = os.path.join(base, 'reduped_reads_samtools/{indiv}.bam'),
+        realigned_bam = os.path.join(base, 'realigned_reads/{indiv}.bam')
+    output:
+        os.path.join(base, 'bam_stats/{indiv}.bam')
+    shell:
+        'samtools flagstat {input.merged_bam} > {output}; samtools flagstat {input.deduped_bam} >> {output}; samtools flagstat {input.realigned_bam} >> {output}'

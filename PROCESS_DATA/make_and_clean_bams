@@ -1,0 +1,164 @@
+base = config["dirs"]["process_data"]
+ref = config["reference"]
+
+rule bwa_map:
+    input:
+        config["reference"],
+        lambda wildcards: config["samples"][wildcards.sample]["R1"],
+        lambda wildcards: config["samples"][wildcards.sample]["R2"]
+    output:
+        os.path.join(base, "mapped_reads/{sample}.bam")
+    threads: 1
+    log:
+        "logs/bwa_map/{sample}.out",
+        "logs/bwa_map/{sample}.err"
+    shell:
+        'bwa mem -M -t {threads} {input} | samtools view -bS - 1> {output} 2> {log[1]}'
+
+rule samtools_sort:
+    input:
+        os.path.join(base, 'mapped_reads/{sample}.bam')
+    output:
+        temp(os.path.join(base, 'sorted_reads/{sample}.bam'))
+    threads: 1
+    log:
+        "logs/samtools_sort/{sample}.out",
+        "logs/samtools_sort/{sample}.err"
+    shell:
+        'samtools sort -@ {threads} -o {output} {input} 1> {log[0]} 2> {log[1]}'
+
+rule samtools_index_1:
+    input:
+        os.path.join(base, 'sorted_reads/{sample}.bam')
+    output:
+        temp(os.path.join(base, 'sorted_reads/{sample}.bam.bai'))
+    log:
+        "logs/samtools_index/{sample}_1.out",
+        "logs/samtools_index/{sample}_1.err"
+    shell:
+        'samtools index {input} 1> {log[0]} 2> {log[1]}'
+
+rule add_group_names:
+    input:
+        os.path.join(base, 'sorted_reads/{sample}.bam'),
+        os.path.join(base, 'sorted_reads/{sample}.bam.bai')
+    output:
+        temp(os.path.join(base, 'grouped_reads/{sample}.bam'))
+    params:
+        mem = '8',
+        RGLB = lambda wildcards: config["samples"][wildcards.sample]["RGLB"],
+        RGPL = lambda wildcards: config["samples"][wildcards.sample]["RGPL"],
+        RGID = lambda wildcards: config["samples"][wildcards.sample]["RGID"],
+        RGSM = lambda wildcards: config["samples"][wildcards.sample]["RGSM"],
+        RGPU = lambda wildcards: config["samples"][wildcards.sample]["RGPU"]
+    log:
+        "logs/add_group_names/{sample}.out",
+        "logs/add_group_names/{sample}.err"
+    run:
+        if params.RGLB != "NA":
+            command = 'picard -Xmx{params.mem}g AddOrReplaceReadGroups INPUT={input[0]} '
+            command += 'OUTPUT={output} RGLB={params.RGLB} RGPL={params.RGPL} '
+            command += 'RGSM={params.RGSM} RGPU={params.RGPU} 1> {log[0]} 2> {log[1]}'
+            shell(command)
+        else:
+            shell('cp {input} {output}')
+
+rule samtools_index_2:
+    input:
+        os.path.join(base, 'grouped_reads/{sample}.bam')
+    output:
+        temp(os.path.join(base, 'grouped_reads/{sample}.bam.bai'))
+    log:
+        "logs/samtools_index/{sample}_g.out",
+        "logs/samtools_index/{sample}_g.err"
+    shell:
+        'samtools index {input} 1> {log[0]} 2> {log[1]}'
+
+rule merge_bams:
+    input:
+        bams = lambda wildcards: [os.path.join(base, "grouped_reads/" + sample + ".bam") for sample in
+                                  list(config["individuals"][wildcards.indiv]["samples"])],
+        bais = lambda wildcards: [os.path.join(base, "grouped_reads/" + sample + ".bam.bai") for sample in
+                                  list(config["individuals"][wildcards.indiv]["samples"])]
+    output:
+        temp(os.path.join(base, 'merged_reads/{indiv}.bam'))
+    log:
+        "logs/merge_bams/{indiv}.out",
+        "logs/merge_bams/{indiv}.err"
+    run:
+        print(input.bams)
+        if not isinstance(input.bams, list):
+            os.sytem("cp " + input.bams + " " + output[0])
+        else:
+            if len(input.bams) == 1 :
+                os.system("cp " + input.bams[0] + " " + output[0])
+            else:
+                command = "samtools merge " + output[0]
+                for bam in input.bams:
+                    command += " " + bam
+                command += " 1> " + log[0] + " 2> " + log[1]
+                print(command)
+                os.system(command)
+
+rule samtools_index_3:
+    input:
+        merged_bam = os.path.join(base, 'merged_reads/{indiv}.bam')
+    output:
+        temp(os.path.join(base, 'merged_reads/{indiv}.bam.bai'))
+    log:
+        "logs/index/index_3_{indiv}.out",
+        "logs/index/index_3_{indiv}.err"
+    shell:
+        "samtools index {input.merged_bam} 1> {log[0]} 2> {log[1]}"
+
+rule remove_duplicates_samtools:
+    input:
+        os.path.join(base, 'merged_reads/{indiv}.bam')
+        # os.path.join(base, 'reduped_reads/{indiv}.bam')
+    output:
+        temp(os.path.join(base, 'reduped_reads_samtools/{indiv}.bam'))
+    log:
+        "logs/remove_duplicates_samtools/{indiv.out}",
+        "logs/remove_duplicates_samtools/{indiv.err}"
+    shell:
+        "samtools rmdup {input} {output}"
+
+rule samtools_index_4:
+    input:
+        reduped_bam = os.path.join(base, 'reduped_reads_samtools/{indiv}.bam')
+    output:
+        temp(os.path.join(base, 'reduped_reads_samtools/{indiv}.bam.bai'))
+    log:
+        "logs/index/index_4_{indiv}.out",
+        "logs/index/index_4_{indiv}.err"
+    shell:
+        "samtools index {input.reduped_bam} 1> {log[0]} 2> {log[1]}"
+
+rule realign_indels:
+    input:
+        os.path.join(base, 'reduped_reads_samtools/{indiv}.bam'),
+        os.path.join(base, 'reduped_reads_samtools/{indiv}.bam.bai')
+    output:
+        os.path.join(base, 'realigned_reads/{indiv}.indelsAligned.intervals'),
+        os.path.join(base, 'realigned_reads/{indiv}.bam')
+    params:
+        intervals = os.path.join(base, 'realigned_reads/{indiv}.indelsAligned.intervals'),
+        mem = '8',
+        encoding = lambda wildcards: config["individuals"][wildcards.indiv]["ENCODING"]
+    log:
+        "logs/realign_indels/{indiv}.out",
+        "logs/realign_indels/{indiv}.err"
+    run:
+        if params.encoding == "Illumina1.8":
+            shell('gatk -Xmx{params.mem}g -T RealignerTargetCreator -R {ref} ' + 
+                  '-I {input[0]} -o {output[0]} 1> {log[0]} 2> {log[1]}')
+            shell('gatk -Xmx{params.mem}g -T IndelRealigner ' + 
+                  ' -R {ref} -I {input[0]} -targetIntervals {params.intervals} ' + 
+                  '-o {output[1]} 1>> {log[0]} 2>> {log[1]}')
+        else:
+            shell('gatk -Xmx{params.mem}g -T RealignerTargetCreator -R {ref} -fixMisencodedQuals ' + 
+                  '-I {input[0]} -o {output[0]} 1> {log[0]} 2> {log[1]}')
+            shell('gatk -Xmx{params.mem}g -T IndelRealigner -fixMisencodedQuals ' + 
+                  ' -R {ref} -I {input[0]} -targetIntervals {params.intervals} ' + 
+                  '-o {output[1]} 1>> {log[0]} 2>> {log[1]}')
+
