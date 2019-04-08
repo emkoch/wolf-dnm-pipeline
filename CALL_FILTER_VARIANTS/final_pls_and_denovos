@@ -1,0 +1,289 @@
+base_p = config["dirs"]["process_data"]
+base = config["dirs"]["variant_filtering"]
+ref = config["reference"]
+
+rule get_final_pls_before_gc:
+    input:
+        vcf = os.path.join(base, "remove_read_gaps/chr{chrom}_{trio}.vcf.gz"),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        vcf = os.path.join(base, "final_pls/before_gc/chr{chrom}_{trio}.vcf.gz")
+    params:
+        mbq = '15',
+        het = '0.01',
+        mem = '4',
+        call_conf = '10',
+        chrom = '{chrom}'
+    log:
+        "logs/get_final_pls_before_gc/chr{chrom}_{trio}.out",
+        "logs/get_final_pls_before_gc/chr{chrom}_{trio}.err"
+    run:
+        command = 'gatk -Xmx{params.mem}g -T UnifiedGenotyper -R {ref}'
+        command += ' -I ' + input.child_bam
+        command += ' -I ' + input.mother_bam
+        command += ' -I ' + input.father_bam
+        command += ' -L ' + input.vcf
+        command += ' -glm SNP -mbq {params.mbq} -stand_call_conf {params.call_conf} '
+        command += ' -out_mode EMIT_ALL_SITES -hets {params.het} --allSitePLs '
+        command += ' -o {output.vcf} 1> {log[0]} 2> {log[1]}'
+        print(command)
+        shell(command)
+
+rule get_final_pls_after_gc:
+    input:
+        vcf = os.path.join(base, "remove_high_gc/chr{chrom}_{trio}.vcf.gz"),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        vcf = os.path.join(base, "final_pls/after_gc/chr{chrom}_{trio}.vcf.gz")
+    params:
+        mbq = '15',
+        het = '0.01',
+        mem = '4',
+        call_conf = '10',
+        chrom = '{chrom}'
+    log:
+        "logs/get_final_pls_after_gc/chr{chrom}_{trio}.out",
+        "logs/get_final_pls_after_gc/chr{chrom}_{trio}.err"
+    run:
+        command =  'gatk -Xmx{params.mem}g -T UnifiedGenotyper -R {ref}'
+        command += ' -I ' + input.child_bam
+        command += ' -I ' + input.mother_bam
+        command += ' -I ' + input.father_bam
+        command += ' -L ' + input.vcf
+        command += ' -glm SNP -mbq {params.mbq} -stand_call_conf {params.call_conf} '
+        command += ' -out_mode EMIT_ALL_SITES -hets {params.het} --allSitePLs '
+        command += ' -o {output.vcf} 1> {log[0]} 2> {log[1]}'
+        print(command)
+        shell(command)
+
+rule get_trans_het_pls_before_gc:
+    input:
+	vcfs = [os.path.join(base, "final_pls/before_gc/chr" + chrom + "_{trio}.vcf.gz")
+                for chrom in CHROMOSOMES],
+    output:
+        csv = os.path.join(base, "trans_het_pls/before_gc/trio_{trio}.csv")
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}'
+    run:
+        get_trans_pls(input.vcfs, output.csv, params.child, params.mother, params.father)
+
+rule get_trans_het_pls_after_gc:
+    input:
+	vcfs = [os.path.join(base, "final_pls/after_gc/chr" + chrom + "_{trio}.vcf.gz")
+                for chrom in CHROMOSOMES],
+    output:
+        csv = os.path.join(base, "trans_het_pls/after_gc/trio_{trio}.csv")
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}'
+    run:
+        get_trans_pls(input.vcfs, output.csv, params.child, params.mother, params.father)
+
+rule get_parental_homo_pls_before_gc:
+    input:
+        vcfs = [os.path.join(base, "remove_read_gaps/chr" + chrom + "_{trio}.vcf.gz")
+                for chrom in CHROMOSOMES]
+    output:
+        csv = os.path.join(base, "parental_homo_pls/before_gc/trio_{trio}.csv")
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}'
+    run:
+        get_homo_pls(input.vcfs, output.csv, params.child, params.mother, params.father)
+
+
+rule get_parental_homo_pls_after_gc:
+    input:
+        vcfs = [os.path.join(base, "remove_high_gc/chr" + chrom + "_{trio}.vcf.gz")
+                for chrom in CHROMOSOMES]
+    output:
+        csv = os.path.join(base, "parental_homo_pls/after_gc/trio_{trio}.csv")
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}'
+    run:
+        get_homo_pls(input.vcfs, output.csv, params.child, params.mother, params.father)
+
+rule calc_denovos_before_gc:
+    input:
+        vcf = os.path.join(base, "remove_read_gaps/chr{chrom}_{trio}.vcf.gz")
+    output:
+        vcf = os.path.join(base, "denovos/pp_vcfs/before_gc/chr{chrom}_{trio}.vcf"),
+        csv = os.path.join(base, "denovos/pp_vcfs/before_gc/chr{chrom}_{trio}.csv")
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}',
+        prior = PRIOR_MU,
+        theta = '0.008'
+    run:
+        deslowmo(infile = input.vcf, outfile_vcf = output.vcf, outfile_pp = output.csv,
+                 child = params.child, mother = params.mother, father = params.father, 
+                 prior = params.prior, theta = params.theta, stats = ["QD", "MQRankSum"])
+
+rule calc_denovos_after_gc:
+    input:
+        vcf = os.path.join(base, "remove_read_gaps/chr{chrom}_{trio}.vcf.gz")
+    output:
+        vcf = os.path.join(base, "denovos/pp_vcfs/after_gc/chr{chrom}_{trio}.vcf"),
+        csv = os.path.join(base, "denovos/pp_vcfs/after_gc/chr{chrom}_{trio}.csv")
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}',
+        prior = config["prior_mu"],
+        theta = config["theta"]
+    run:
+        deslowmo(infile = input.vcf, outfile_vcf = output.vcf, outfile_pp = output.csv,
+                 child = params.child, mother = params.mother, father = params.father, 
+                 prior = params.prior, theta = params.theta, stats = ["QD", "MQRankSum"])
+
+rule all_denovo_to_csv_before_gc:
+    input:
+        vcfs = [os.path.join(base, "denovos/pp_vcfs/before_gc/chr" + chrom + "_{trio}.vcf"))
+                for chrom in CHROMOSOMES]
+    output:
+        os.path.join(base, 'denovos/csv/before_gc/all_deslowmo_trio_{trio}.csv')
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}'
+    run:
+        deslowmo_vcf_to_csv(infiles = input.vcfs, outfile = output.csv, child = params.child,
+                            mother = params.mother, father = params.father,
+                            stats = ["QD", "MQRankSum", "HaplotypeScore", "SOR"])
+
+rule all_denovo_to_csv_after_gc:
+    input:
+        vcfs = [os.path.join(base, "denovos/pp_vcfs/after_gc/chr" + chrom + "_{trio}.vcf"))
+                for chrom in CHROMOSOMES]
+    output:
+        csv = os.path.join(base, 'denovos/csv/after_gc/all_deslowmo_trio_{trio}.csv')
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}'
+    run:
+        deslowmo_vcf_to_csv(infiles = input.vcfs, outfile = output.csv, child = params.child,
+                            mother = params.mother, father = params.father,
+                            stats = ["QD", "MQRankSum", "HaplotypeScore", "SOR"])
+
+rule cutoff_before_gc:
+    input:
+        vcf = os.path.join(base, "denovos/pp_vcfs/before_gc/chr{chrom}_{trio}.vcf")
+    output:
+        vcf = os.path.join(base, "denovos/cutoff/before_gc/chr{chrom}_{trio}.vcf")
+    params:
+        cutoff = config["pp_cutoff"]
+    run:
+        pp_cutoff(input.vcf, output.vcf, params.cutoff)
+
+rule cutoff_after_gc: 
+    input:
+        vcf = os.path.join(base, "denovos/pp_vcfs/after_gc/chr{chrom}_{trio}.vcf")
+    output:
+        vcf = os.path.join(base, "denovos/cutoff/after_gc/chr{chrom}_{trio}.vcf")
+    params:
+        cutoff = config["pp_cutoff"]
+    run:
+        pp_cutoff(input.vcf, output.vcf, params.cutoff)
+
+rule get_locus_bams_before_gc:
+    input:
+        csv = os.path.join(base, "denovos/pp_vcfs/before_gc/chr{chrom}_{trio}.csv"),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        tar = os.path.join(base, "denovos/cutoff/before_gc/chr{chrom}_{trio}.tar.gz")
+    params:
+        genome = ref,
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        trio = '{trio}',
+        outdir = os.path.join(base_p, 'bqsr_reads_by_chr/'),
+        cutoff = config["pp_cutoff"],
+        chromosome = '{chrom}'
+    run:
+        from get_bams import get_bams_and_plot
+        identifier = 'chr' + params.chromosome + '_trio_' + params.trio
+        print("identifier: " + identifier)
+        cutoff = float(params.cutoff)
+        outdir = params.outdir
+
+        region_names = get_bams_and_plot(csvs=[input.csv],
+                                         output=output.tar,
+                                         bams_child=[input.child_bam],
+                                         bams_mother=[input.mother_bam],
+                                         bams_father=[input.father_bam],
+                                         cname=params.trio,
+                                         mname=params.mother,
+                                         fname=params.father,
+                                         cutoff=cutoff,
+                                         outdir=outdir,
+                                         identifier=identifier,
+                                         region_size=200,
+                                         genome = params.genome)
+
+rule get_locus_bams_after_gc:
+    input:
+        csv = os.path.join(base, "denovos/pp_vcfs/after_gc/chr{chrom}_{trio}.csv"),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        tar = os.path.join(base, "denovos/cutoff/after_gc/chr{chrom}_{trio}.tar.gz")
+    params:
+        genome = ref,
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        trio = '{trio}',
+        outdir = os.path.join(base_p, 'bqsr_reads_by_chr/'),
+        cutoff = config["pp_cutoff"],
+        chromosome = '{chrom}'
+    run:
+        from get_bams import get_bams_and_plot
+        identifier = 'chr' + params.chromosome + '_trio_' + params.trio
+        print("identifier: " + identifier)
+        cutoff = float(params.cutoff)
+        outdir = params.outdir
+
+        region_names = get_bams_and_plot(csvs=[input.csv],
+                                         output=output.tar,
+                                         bams_child=[input.child_bam],
+                                         bams_mother=[input.mother_bam],
+                                         bams_father=[input.father_bam],
+                                         cname=params.trio,
+                                         mname=params.mother,
+                                         fname=params.father,
+                                         cutoff=cutoff,
+                                         outdir=outdir,
+                                         identifier=identifier,
+                                         region_size=200,
+                                         genome = params.genome)
+

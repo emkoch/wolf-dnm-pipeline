@@ -1,0 +1,202 @@
+base_p = config["dirs"]["process_data"]
+base = config["dirs"]["variant_filtering"]
+ref = config["reference"]
+
+rule calculate_likelihoods:
+    input:
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        vcf = os.path.join(base, 'calculate_likelihoods/chr{chrom}_{trio}.vcf.gz')
+    params:
+        mbq = '15',
+        het = '0.01',
+        mem = '4',
+        call_conf = '10',
+        chrom = '{chrom}'
+    log:
+        'logs/calculate_likelihoods/chr{chrom}_{trio}.out',
+        'logs/calculate_likelihoods/chr{chrom}_{trio}.err'
+    run:
+        command = 'gatk -Xmx{params.mem}g -T UnifiedGenotyper -R {ref}'
+        command += ' -I ' + input.child_bam
+        command += ' -I ' + input.mother_bam
+        command += ' -I ' + input.father_bam
+        command += ' -L chr{params.chrom} -glm SNP -mbq {params.mbq} -stand_call_conf {params.call_conf} '
+        command += '-out_mode EMIT_ALL_SITES '
+        command += '-hets {params.het} -o {output.vcf} 1> {log[0]} 2> {log[1]}'
+        print(command)
+        shell(command)
+
+rule repeat_mask:
+    input:
+        vcf = os.path.join(base, 'calculate_likelihoods/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'repeat_mask/chr{chrom}_{trio}.vcf.gz'),
+        stat = os.path.join(base, 'repeat_mask/chr{chrom}_{trio}.count')
+    params:
+        refmask = config['refmask']
+    run:
+        mask_the_vcf(input.vcf, params.refmask, output.vcf, output.stat)
+
+rule remove_missing:
+    input:
+        os.path.join(base, 'repeat_mask/chr{chrom}_{trio}.vcf.gz')
+    output:
+        os.path.join(base, 'remove_missing/chr{chrom}_{trio}.vcf.gz'),
+        os.path.join(base, 'remove_missing/chr{chrom}_{trio}.count')
+    log:
+        'logs/remove_missing/chr{chrom}_{trio}.out',
+        'logs/remove_missing/chr{chrom}_{trio}.err'
+    shell:
+        'gzip -cd {input} | grep -v "\.\/\." | gzip -c - > {output[0]} 2> {log[1]}; '
+        'echo COUNTING VARIANTS BEFORE AND AFTER; '
+        'zcat {input} | grep -v "^#" | wc -l > {output[1]}; '
+        'zcat {output[0]} | grep -v "^#" | wc -l >> {output[1]}'
+
+rule remove_depth:
+    input:
+        vcf = os.path.join(base, 'remove_missing/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'remove_depth/chr{chrom}_{trio}.vcf.gz'),
+        stat = os.path.join(base, 'remove_depth/chr{chrom}_{trio}.count')
+    log:
+        'logs/remove_depth/chr{chrom}_{trio}.out',
+        'logs/remove_depth/chr{chrom}_{trio}.err'
+    params:
+        COV_MIN = config["COV_MIN"],
+        COV_MAX = config["COV_MAX"]
+    run:
+        remove_depth_range(infile = input.vcf,
+                           outfile = output.vcf,
+                           min_depth = params.COV_MIN,
+                           max_depth = params.COV_MAX)
+        print("COUNTING VARIANTS BEFORE AND AFTER")
+        os.system('zcat ' + input.vcf + ' | grep -v "^#" | wc -l > ' + output.stat)
+        os.system('zcat ' + output.vcf + ' | grep -v "^#" | wc -l >> ' + output.stat)
+
+rule select_snps_only:
+    input:
+        vcf = os.path.join(base, 'remove_depth/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'snps_only/chr{chrom}_{trio}.vcf.gz')
+    run:
+        select_snps_only(infile=input.vcf, outfile=output.vcf)
+
+rule remove_parental_alt_alleles:
+    input:
+        vcf = os.path.join(base, 'remove_depth/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'remove_parental_alt/chr{chrom}_{trio}.vcf.gz'),
+        stat = os.path.join(base, 'remove_parental_alt/chr{chrom}_{trio}.count')
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father']
+    run:
+        import gzip 
+        import shutil
+        remove_alt_read_parental_vcf(infile = input.vcf,
+                                     outfile = output.vcf,
+                                     mother = params.mother,
+                                     father = params.father,
+                                     readcut = 0)
+        print("COUNTING VARIANTS BEFORE AND AFTER")
+        os.system('zcat ' + input.vcf + ' | grep -v "^#" | wc -l > ' + output.stat)
+        os.system('zcat ' + output.vcf + ' | grep -v "^#" | wc -l >> ' + output.stat)
+
+rule remove_high_var_snps:
+    input:
+        in_vcf = os.path.join(base, 'snps_only/chr{chrom}_{trio}.vcf.gz'),
+        var_vcf = os.path.join(base, 'snps_only/chr{chrom}_{trio}.vcf.gz')
+    output:
+        os.path.join(base, 'remove_high_var_snps/chr{chrom}_{trio}.vcf.gz')
+    params:
+        varcut = config["varcut"],
+        varcut_window = config["varcut_window"]
+    run:
+        import gzip
+        import shutil
+        out_nogz = os.path.splitext(output[0])[0]
+        fast_remove_high_var_gzip(infile=input.in_vcf,
+                                  varfile=input.var_vcf,
+                                  outfile=out_nogz,
+                                  varcut=params.varcut,
+                                  window=params.varcut_window)
+        print("compressing " + out_nogz)
+        with open(out_nogz, "rb") as f_in:
+            with gzip.open(output[0], 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        os.remove(out_nogz)
+
+rule remove_high_var:
+    input:
+        in_vcf = os.path.join(base, 'remove_parental_alt/chr{chrom}_{trio}.vcf.gz'),
+        var_vcf = os.path.join(base, 'snps_only/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'remove_high_var/chr{chrom}_{trio}.vcf.gz'),
+        stat = os.path.join(base, 'remove_high_var/chr{chrom}_{trio}.count')
+    params:
+        varcut = config["varcut"],
+        varcut_window = config["varcut_window"]
+    run:
+        import gzip
+        import shutil
+        out_nogz = os.path.splitext(output.vcf)[0]
+        fast_remove_high_var_gzip(infile=input.in_vcf,
+                                  varfile=input.var_vcf,
+                                  outfile=out_nogz,
+                                  varcut=params.varcut,
+                                  window=params.varcut_window)
+        print("compressing " + out_nogz)
+        with open(out_nogz, "rb") as f_in:
+            with gzip.open(output.vcf, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        os.remove(out_nogz)
+        print("COUNTING VARIANTS BEFORE AND AFTER")
+        os.system('zcat ' + input.in_vcf + ' | grep -v "^#" | wc -l > ' + output.stat)
+        os.system('zcat ' + input.in_vcf + ' | grep -v "^#" | wc -l >> ' + output.stat)
+    
+rule remove_read_gaps:
+    input:
+        vcf = os.path.join(base, 'remove_high_var/chr{chrom}_{trio}.vcf.gz'),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        vcf = os.path.join(base, "remove_read_gaps/chr{chrom}_{trio}.vcf.gz"),
+        stat = os.path.join(base, "remove_read_gaps/chr{chrom}_{trio}.count")
+    params:
+        read_cut = config["GAP_READ_CUT"],
+        check_perc = config["bam_check_perc"]
+    run:
+        bams = [input.child_bam, input.mother_bam, input.father_bam]
+        remove_indel_parental(infile=input.vcf,
+                              outfile=output.vcf,
+                              indelcut=params.read_cut,
+                              bams=bams,
+                              p_check=float(params.check_perc),
+                              stat_out=output.stat)
+
+rule remove_high_gc:
+    input:
+        vcf = os.path.join(base, "remove_read_gaps/chr{chrom}_{trio}.vcf.gz")
+    output:
+        vcf = os.path.join(base, "remove_high_gc/chr{chrom}_{trio}.vcf.gz"),
+        stat = os.path.join(base, "remove_high_gc/chr{chrom}_{trio}.count")
+    params:
+        check_perc = 1,
+        window_size = config["gc_window"],
+        max_gc_perc = config["max_gc_perc"]
+    run:
+        remove_gc_range(input.vcf, output.vcf, output.stat, ref, 
+                        params.check_perc, params.window_size, params.max_gc_perc)
+

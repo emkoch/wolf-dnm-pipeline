@@ -1,0 +1,125 @@
+base_p = config["dirs"]["process_data"]
+base = config["dirs"]["variant_filtering"]
+ref = config["reference"]
+
+rule potential_denovos:
+    input:
+        vcf = os.path.join(base, 'remove_high_var/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'potential_denovos/initial_potential/chr{chrom}_{trio}.vcf.gz')
+    params:
+        child = lambda wildcards: wildcards.trio
+    run:
+        get_potential_denovos(infile=input.vcf, outfile=output.vcf, child=params.child)
+
+rule remove_gap_potential:
+    input:
+        vcf = os.path.join(base, 'potential_denovos/initial_potential/chr{chrom}_{trio}.vcf.gz'),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        vcf = os.path.join(base, 'potential_denovos/remove_read_gaps/chr{chrom}_{trio}.vcf.gz'),
+        stat = os.path.join(base, 'potential_denovos/remove_read_gaps/chr{chrom}_{trio}.count')
+    params:
+        read_cut = config["GAP_READ_CUT"],
+        check_perc = 1
+    run:
+        remove_indel_parental(infile=input.vcf,
+                              outfile=output.vcf,
+                              indelcut=params.read_cut,
+                              bams=[input.child_bam, input.mother_bam, input.father_bam],
+                              p_check=params.check_perc,
+                              stat_out=output.stat)
+
+rule remove_high_gc_potential:
+    input:
+        vcf = os.path.join(base, 'potential_denovos/remove_read_gaps/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'potential_denovos/remove_high_gc/chr{chrom}_{trio}.vcf.gz'),
+        stat = os.path.join(base, 'potential_denovos/remove_high_gc/chr{chrom}_{trio}.count'),
+    params:
+        check_perc = 1,
+        window_size = config["gc_window"],
+        max_gc_perc = config["max_gc_perc"]
+    run:
+        remove_gc_range(input.vcf, output.vcf, output.stat, ref, 
+                        params.check_perc, params.window_size, params.max_gc_perc)
+
+rule calc_denovos:
+    input:
+        vcf = os.path.join(base, 'potential_denovos/remove_read_gaps/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'potential_denovos/pp_vcfs/no_gc_filt/pp_trio_{trio}_chr{chrom}.vcf'),
+        csv = os.path.join(base, 'potential_denovos/pp_vcfs/no_gc_filt/pp_trio_{trio}_chr{chrom}.csv')
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}',
+        prior = config['prior_mu'],
+        theta = config['theta']
+    run:
+        deslowmo(infile = input.vcf, outfile_vcf = output.vcf, outfile_pp = output.csv,
+                 child = params.child, mother = params.mother, father = params.father, 
+                 prior = params.prior, theta = params.theta, stats = ["QD", "MQRankSum"])
+
+rule calc_denovos_gc_filt:
+    input:
+        vcf = os.path.join(base, 'potential_denovos/remove_high_gc/chr{chrom}_{trio}.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'potential_denovos/pp_vcfs/gc_filt/pp_trio_{trio}_chr{chrom}.vcf'),
+        csv = os.path.join(base, 'potential_denovos/pp_vcfs/gc_filt/pp_trio_{trio}_chr{chrom}.csv')
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        child = '{trio}',
+        prior = config['prior_mu'],
+        theta = config['theta']
+    run:
+        deslowmo(infile = input.vcf, outfile_vcf = output.vcf, outfile_pp = output.csv,
+                 child = params.child, mother = params.mother, father = params.father, 
+                 prior = params.prior, theta = params.theta, stats = ["QD", "MQRankSum"])
+
+rule get_locus_bams:
+    input:
+        csv = os.path.join(base, 'potential_denovos/pp_vcfs/no_gc_filt/pp_trio_{trio}_chr{chrom}.csv'),
+        child_bam = os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{trio}.bam'),
+        mother_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['mother'] + '.bam'),
+        father_bam = lambda wildcards: os.path.join(base_p, 'bqsr_reads_by_chr/chr' +
+                                                    wildcards.chrom + '_' +
+                                                    config['trios'][wildcards.trio]['father'] + '.bam')
+    output:
+        tar = os.path.join(base, 'locus_bams/trio_{trio}_chr{chrom}.tar.gz')
+    params:
+        mother = lambda wildcards: config['trios'][wildcards.trio]['mother'],
+        father = lambda wildcards: config['trios'][wildcards.trio]['father'],
+        trio = '{trio}',
+        outdir = os.path.join(base, 'locus_bams'),
+        cutoff = config['pp_cutoff'],
+        chromosome = '{chrom}',
+        region_size= config['igv_window']
+    run:
+        identifier = 'chr' + params.chromosome + '_trio_' + params.trio
+        print('identifier: ' + identifier)
+        cutoff = float(params.cutoff)
+        outdir = params.outdir
+
+        region_names = get_bams_and_plot(csvs=[input.csv],
+                                         output=output.tar,
+                                         bams_child=[input.child_bam],
+                                         bams_mother=[input.mother_bam],
+                                         bams_father=[input.father_bam],
+                                         cname=params.trio,
+                                         mname=params.mother,
+                                         fname=params.father,
+                                         cutoff=cutoff,
+                                         outdir=outdir,
+                                         genome=ref,
+                                         identifier=identifier,
+                                         region_size=params.region_size)

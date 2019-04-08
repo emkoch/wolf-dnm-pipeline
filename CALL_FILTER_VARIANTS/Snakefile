@@ -1,0 +1,39 @@
+import os
+from filter_tools import *
+from get_bams import *
+from gc_content import *
+
+# Define chromosome names
+CHROMOSOMES = list(range(1,38))
+for i in range(len(CHROMOSOMES)):
+    if CHROMOSOMES[i] < 10:
+        CHROMOSOMES[i] = "0" + str(CHROMOSOMES[i])
+    else:
+        CHROMOSOMES[i] = str(CHROMOSOMES[i])
+
+configfile: 'config/config.json'
+
+include: "bqsr_bams"
+include: "lhoods_and_site_filters"
+include: "potential_denovos"
+
+base_p = config["dirs"]["process_data"]
+base = config["dirs"]["variant_filtering"]
+ref = config["reference"]
+
+rule all:
+    input:
+        expand(os.path.join(base_p, 'recalibration_table/post_chr03_{indiv}.grp'),
+               indiv=config["individuals"]),
+        expand(os.path.join(base_p, 'recalibration_table/chr03_{indiv}_recalibration_plots.pdf'),
+               indiv=config["individuals"]),
+        expand(os.path.join(base, 'remove_high_gc/chr{chrom}_{trio}.vcf.gz'),
+               chrom=CHROMOSOMES, trio=config["trios"]),
+        expand(os.path.join(base, 'potential_denovos/pp_vcfs/no_gc_filt/pp_trio_{trio}_chr{chrom}.vcf'),
+               chrom=CHROMOSOMES, trio=config["trios"]),
+        expand(os.path.join(base, 'potential_denovos/pp_vcfs/gc_filt/pp_trio_{trio}_chr{chrom}.vcf'),
+               chrom=CHROMOSOMES, trio=config["trios"]),
+        expand(os.path.join(base, 'locus_bams/trio_{trio}_chr{chrom}.tar.gz'),
+               chrom=CHROMOSOMES, trio=config["trios"])
+
+        

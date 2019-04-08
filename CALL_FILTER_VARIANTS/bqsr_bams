@@ -1,0 +1,154 @@
+base_p = config["dirs"]["process_data"]
+base = config["dirs"]["variant_filtering"]
+ref = config["reference"]
+
+rule break_bam_by_chr:
+    input:
+        os.path.join(base_p, 'realigned_reads/{indiv}.bam'),
+        os.path.join(base_p, 'realigned_reads/{indiv}.bai')
+    output:
+        os.path.join(base_p, 'realigned_reads_by_chr/chr{chrom}_{indiv}.bam'),
+        os.path.join(base_p, 'realigned_reads_by_chr/chr{chrom}_{indiv}.bam.bai')
+    params:
+        chromosome = 'chr{chrom}'
+    log:
+        "logs/break_bam_by_chr/chr{chrom}_{indiv}.out",
+        "logs/break_bam_by_chr/chr{chrom}_{indiv}.err"
+    run:
+        command_1 = "samtools view -b -h {input[0]} {params.chromosome} > {output[0]}"
+        print(command_1)
+        shell(command_1)
+        command_2 = "samtools index {output[0]}"
+        print(command_2)
+        shell(command_2)
+
+rule call_variants_no_bqsr:
+    input:
+        bams = [os.path.join(base_p, 'realigned_reads_by_chr/chr03' +
+                x) for x in expand('_{indiv}.bam', indiv=config["individuals"])],
+        bais = [os.path.join(base_p, 'realigned_reads_by_chr/chr03' +
+                x) for x in expand('_{indiv}.bam.bai', indiv=config["individuals"])]
+    output:
+        os.path.join(base, 'no_bqsr_vcfs/chr03.vcf.gz')
+    params:
+        mbq = '15',
+        het = '0.01',
+        mem = '4',
+        call_conf = '10',
+        chrom = '03'
+    log:
+        "logs/no_bqsr_vcfs/recall_chr03.out",
+        "logs/no_bqsr_vcfs/recall_chr03.err"
+    run:
+        command = 'gatk -Xmx{params.mem}g -T UnifiedGenotyper -R {ref} '
+        for bam in input.bams:
+            command += ' -I ' + bam
+        command += ' -L chr{params.chrom} -glm SNP -mbq {params.mbq} -stand_call_conf {params.call_conf} '
+        command += '-out_mode EMIT_VARIANTS_ONLY'
+        command += ' -hets {params.het} -o {output} 1> {log[0]} 2> {log[1]}'
+        shell(command)
+
+rule repeat_mask_prebqsr:
+    input:
+        vcf = os.path.join(base, 'no_bqsr_vcfs/chr03.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'no_bqsr_refmasked_vcfs/chr03.vcf.gz'),
+        stat = os.path.join(base, 'no_bqsr_refmasked_vcfs/chr03.count')
+    log:
+        'logs/repeat_mask_prebqsr/chr03.out',
+        'logs/repeat_mask_prebqsr/chr03.err'
+    params:
+        refmask = config["refmask"]
+    run:
+        mask_the_vcf(input.vcf, params.refmask, output.vcf, output.stat)
+
+rule remove_missing_prebqsr:
+    input:
+        vcf = os.path.join(base, 'no_bqsr_refmasked_vcfs/chr03.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'no_bqsr_nomissing_vcfs/chr03.vcf.gz')
+    log:
+        'logs/nomissing_prebqsr/chr03.out',
+        'logs/nomissing_prebqsr/chr03.err'
+    shell:
+        'gzip -cd {input.vcf} | grep -v "\.\/\." | gzip -c - > {output.vcf} 2> {log[1]}'
+
+rule select_snps_prebqsr:
+    input:
+        vcf = os.path.join(base, 'no_bqsr_nomissing_vcfs/chr03.vcf.gz')
+    output:
+        vcf = os.path.join(base, 'no_bqsr_snps_vcfs/chr03.vcf.gz')
+    params:
+        mem = "4"
+    run:
+        os.system('gzip -cd ' + input.vcf + ' > ' + os.path.splitext(input.vcf)[0])
+        command_2 = r"""gatk -Xmx""" + params.mem + r"""g -T SelectVariants -R """ + ref + r""" -V """
+        command_2 += os.path.splitext(input.vcf)[0] + r""" -selectType SNP """
+        command_2 += r"""-restrictAllelesTo BIALLELIC -select '"QD > 2.0 && FS < 60.0 && MQ > 40.0 && MQRankSum > -12.5 && ReadPosRankSum > 15.0"' """
+        command_2 += r"""-o """ + output.vcf
+        print(command_2)
+        os.system(command_2)
+        os.system('rm ' + os.path.splitext(input.vcf)[0])
+
+rule recalibration_table:
+    input:
+        vcf = os.path.join(base, 'no_bqsr_snps_vcfs/chr03.vcf.gz'),
+        bam = os.path.join(base_p, 'realigned_reads_by_chr/chr03_{indiv}.bam'),
+        bai = os.path.join(base_p, 'realigned_reads_by_chr/chr03_{indiv}.bam.bai')
+    output:
+        os.path.join(base_p, 'recalibration_table/chr03_{indiv}.grp')
+    params:
+        mem = '4'
+    log:
+        'logs/recalibration_table/chr03_{indiv}.out',
+        'logs/recalibration_table/chr03_{indiv}.err'
+    shell:
+        "gatk -Xmx{params.mem}g -T BaseRecalibrator -R {ref} "
+        "-I {input.bam} -knownSites {input.vcf} -o {output} 1> {log[0]} 2> {log[1]}"
+
+rule recalibrate_base_scores:
+    input:
+        bam = os.path.join(base_p, 'realigned_reads_by_chr/chr{chrom}_{indiv}.bam'),
+        bai = os.path.join(base_p, 'realigned_reads_by_chr/chr{chrom}_{indiv}.bam.bai'),
+        grp = os.path.join(base_p, 'recalibration_table/chr03_{indiv}.grp')
+    output:
+        os.path.join(base_p, 'bqsr_reads_by_chr/chr{chrom}_{indiv}.bam')
+    params:
+        mem = '4'
+    log:
+        'logs/bqsr_reads/chr{chrom}_{indiv}.out',
+        'logs/bqsr_reads/chr{chrom}_{indiv}.err'
+    shell:
+        'gatk -Xmx{params.mem}g -T PrintReads -R {ref} '
+        '-I {input.bam} -BQSR {input.grp} -o {output} 1> {log[0]} 2> {log[1]}'
+
+rule post_recalibration_table:
+    input:
+        vcf = os.path.join(base, 'no_bqsr_snps_vcfs/chr03.vcf.gz'),
+        bam = os.path.join(base_p, 'realigned_reads_by_chr/chr03_{indiv}.bam'),
+        grp = os.path.join(base_p, 'recalibration_table/chr03_{indiv}.grp')
+    output:
+        os.path.join(base_p, 'recalibration_table/post_chr03_{indiv}.grp')
+    params:
+        mem = '4'
+    log:
+        'logs/post_recalibration_table/chr03_{indiv}.out',
+        'logs/post_recalibration_table/chr03_{indiv}.err'
+    shell:
+        'gatk -Xmx{params.mem}g -T BaseRecalibrator -R {ref} '
+        '-I {input.bam} -knownSites {input.vcf} -BQSR {input.grp} -o {output} 1> {log[0]} 2> {log[1]}'
+
+rule recalibration_plots:
+    input:
+        after = os.path.join(base_p, 'recalibration_table/post_chr03_{indiv}.grp'),
+        before = os.path.join(base_p, 'recalibration_table/chr03_{indiv}.grp')
+    output:
+        os.path.join(base_p, 'recalibration_table/chr03_{indiv}_recalibration_plots.pdf')
+    params:
+        mem = '4'
+    log:
+        'logs/post_recalibration_plot/chr03_{indiv}_recalibration_plots.out',
+        'logs/post_recalibration_plot/chr03_{indiv}_recalibration_plots.err'
+    shell:
+        'gatk -Xmx{params.mem}g -T AnalyzeCovariates -R {ref} -l DEBUG '
+        '-before {input.before} -after {input.after} -plots {output} 1> {log[0]} 2> {log[1]}'
